@@ -4,7 +4,20 @@ An autonomous Mini Sumo robot control system built for Arduino. This firmware fe
 
 The robot is engineered around a strict prioritization loop: Safety Switch Check ➔ Edge Avoidance ➔ Frontal Attack Tracking ➔ Flank Acquisition ➔ Active Searching.
 
+
+
 ---
+
+## 🏆 Competition History
+
+This robot competed in the **BattleLab Robotica 2026** competition, participating in the highly competitive **3kg Autonomous Sumo Robot** category. 
+
+### Team Members
+* **Mutiu Alexandra Maria**
+* **Kaminschi Karina Maria** 
+* **Marita-Thuri Maria** -
+
+The robot was designed, built, and calibrated from scratch to meet the strict 3kg weight limit and dimensional requirements, successfully demonstrating real-time sensor processing.
 
 ## 🛠️ Hardware Setup
 
