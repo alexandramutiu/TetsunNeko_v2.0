@@ -1,212 +1,219 @@
-#include <Sabertooth.h>
+#include <Wire.h>
+#include <Adafruit_VL53L0X.h>
 
-//DOAR UN MODEL
+Adafruit_VL53L0X tof;
 
-// PIN 2  - senzor oponent stanga
-// PIN 3  - senzor oponent dreapta
-// PIN 4  - senzor oponent centru
-// A0     - senzor linie fata
-// A1     - senzor linie spate
-// A2     - senzor linie dreapta (sau stanga)
-// PIN 13 - Modul Start/Stop
-// TX1    - Sabertooth TX
+#define START_STOP_PIN 22
 
+#define TOF_LIMIT_CLOSE 700
+#define TOF_LIMIT_FAR   1200
 
-#define PIN_SENZ_STG 2
-#define PIN_SENZ_DR 3
-#define PIN_SENZ_FATA 4
+#define SHARP_PIN A3
+#define SHARP_LIMIT 300
 
-#define PIN_LIA_STG A0
-#define PIN_LIA_CENTRU A1
-#define PIN_LIA_DR A2
+#define LIGHT_L A0
+#define LIGHT_C A1
+#define LIGHT_R A2
+#define LIGHT_LIMIT 500
 
-#define PIN_START_STOP 13
+#define ENA 5
+#define ENB 6
+#define IN1 8
+#define IN2 9
+#define IN3 10
+#define IN4 11
 
-//initializarea ca sa lucrez pe biti
-#define SENZ_OP_STG 0x01
-#define SENZ_OP_DR 0x02
-#define LINIE_FATA 0x04
-//#define LINIE_SPATE 0x08
-#define LINIE_STG 0x10
-#define LINIE_CTR 0x20
-#define LINIE_DR 0x40
-
-
-#define TIMP_SPATE 500
-#define TIMP_INTOARCERE 300
-#define TIMP_LIA_INAINTE 80
-#define TIMP_ROT_LINIE   180
-
-#define VITEZA_MAX       127
-#define VITEZA_CAUTARE    80
-#define VITEZA_JUMATATE    60
-
-
-
-typedef enum{
-  STATE_READY = 0,
-  STATE_FIGHT,
-  STATE_STOPPED
-
-}TetsunNekoState;
-
-typedef enum{
-  DIST_NONE = 0,
-  DIST_FAR, // >10 CM
-  DIST_CLOSE //in front of us <10 cm
-}OpponentDist;
-
-//Global var
-Sabertooth ST(128);
-TetsunNekoState state;
-
-uint8_t mascaSensori;
-uint8_t senzori;
-
-bool irStg, irCentru, irDr;
-bool liaStg, liaCentru, liaDr;
-
-bool onLine, offLine;
-int parteLinie;
-
-unsigned long timpAtac;  
-unsigned long timpQTR;
-int PRAG_LINIE = 400;
+int motorSpeed = 220;
 
 void setup() {
-  pinMode(PIN_SENZ_STG,    INPUT);
-  pinMode(PIN_SENZ_DR,     INPUT);
-  //pinMode(PIN_SENZ_CENTRU, INPUT);
-  pinMode(PIN_START_STOP,  INPUT);
+  Serial.begin(9600);
+  delay(1000);
 
-  pinMode(PIN_LIA_STG,    INPUT);
-  pinMode(PIN_LIA_CENTRU, INPUT);
-  pinMode(PIN_LIA_DR,     INPUT);
+  pinMode(START_STOP_PIN, INPUT);
 
- SabertoothTXPinSerial.begin(115200);
+  pinMode(SHARP_PIN, INPUT);
+  pinMode(LIGHT_L, INPUT);
+  pinMode(LIGHT_C, INPUT);
+  pinMode(LIGHT_R, INPUT);
 
-  state      = STATE_READY;
-  onLine     = false;
-  parteLinie = 0;
-  timpAtac   = 0;
-  timpQTR    = 0;
+  pinMode(ENA, OUTPUT);
+  pinMode(ENB, OUTPUT);
+  pinMode(IN1, OUTPUT);
+  pinMode(IN2, OUTPUT);
+  pinMode(IN3, OUTPUT);
+  pinMode(IN4, OUTPUT);
 
-setMotoare(0, 0);
+  stopMotors();
+
+  Wire.begin();
+
+  Serial.println("Starting TOF...");
+  if (!tof.begin()) {
+    Serial.println("TOF FAILED");
+    while (1) {
+      stopMotors();
+    }
+  }
+
+  Serial.println("TOF OK");
 }
 
 void loop() {
-  citesteSenzori();
-
-  switch(state)
-  {
-    case STATE_READY:
-        setMotoare(0,0);
-        timpAtac=millis();
-        if(digitalRead(PIN_START_STOP)==HIGH)
-        {
-          state=STATE_FIGHT;
-          onLine=false;
-        }
-        break;
-    case STATE_FIGHT:
-        if (digitalRead(PIN_START_STOP) == LOW) {
-        state = STATE_STOPPED;
-        break;
-      }
-      if (onLine) linieAlba();
-      else        opponentSearch();
-      break;
-    case STATE_STOPPED:
-        setMotoare(0,0);
-        break;
+  if (digitalRead(START_STOP_PIN) == LOW) {
+    stopMotors();
+    Serial.println("STOPPED");
+    delay(100);
+    return;
   }
+
+  stopMotors();
+  delay(10);
+
+  int lightL = analogRead(LIGHT_L);
+  int lightC = analogRead(LIGHT_C);
+  int lightR = analogRead(LIGHT_R);
+
+  bool whiteLine =
+    lightL > LIGHT_LIMIT ||
+    lightC > LIGHT_LIMIT ||
+    lightR > LIGHT_LIMIT;
+
+  if (whiteLine) {
+    setMotors(255,255);
+    Serial.println("WHITE LINE - Go forward");
+    delay(100);
+    return;
+  }
+
+  VL53L0X_RangingMeasurementData_t m;
+  tof.rangingTest(&m, false);
+
+  int tofDistance = m.RangeMilliMeter;
+  int tofStatus = m.RangeStatus;
+
+  int sharpValue = analogRead(SHARP_PIN);
+
+  bool tofVeryClose =
+    tofStatus != 4 &&
+    tofDistance > 50 &&
+    tofDistance <= TOF_LIMIT_CLOSE;
+
+  bool tofSees =
+    tofStatus != 4 &&
+    tofDistance > 50 &&
+    tofDistance <= TOF_LIMIT_FAR;
+
+  bool leftSees =
+    sharpValue > SHARP_LIMIT;
+
+  Serial.print("TOF=");
+  Serial.print(tofDistance);
+  Serial.print(" | TOF_CLOSE=");
+  Serial.print(tofVeryClose ? 1 : 0);
+
+  Serial.print(" | TOF_SEES=");
+  Serial.print(tofSees ? 1 : 0);
+
+  Serial.print(" | LEFT_SHARP=");
+  Serial.print(sharpValue);
+  Serial.print(" | LEFT_SEES=");
+  Serial.print(leftSees ? 1 : 0);
+
+  Serial.print(" | ACTION=");
+
+  // TOF has priority. If front sees anything up to 1200 mm, attack forward.
+  if (tofSees) {
+    Serial.println("ATTACK_FRONT");
+    forwardPulse();
+  }
+  else if (leftSees) {
+    Serial.println("SPIN_LEFT_THEN_ATTACK");
+    spinLeftPulse();
+    safeDelay(100);
+    forwardPulse();
+  }
+  else {
+    Serial.println("SEARCH_RIGHT");
+    spinRightPulse();
+  }
+
+  delay(20);
 }
 
-
-void citesteSenzori()
-{
-   senzori = 0;
-
-  bool opStg = digitalRead(PIN_SENZ_STG);
-  bool opDr= digitalRead(PIN_SENZ_DR);
-
-  int liaFata = analogRead(PIN_LIA_CENTRU);
-  int liaDr = analogRead(PIN_LIA_DR);
-  int liaStg = analogRead(PIN_LIA_STG);
-
-  if (opStg)
-  { senzori |= SENZ_OP_STG;}
-
-  if (opDr)
-  {senzori |= SENZ_OP_DR;}
-
-  //if (liaSpate < PRAG_LINIE) { senzori |= LINIE_SPATE;}
-  if (liaFata < PRAG_LINIE) {senzori |= LINIE_FATA;}
-  if (liaDr < PRAG_LINIE)   {senzori |= LINIE_DR;}
-  if (liaStg < PRAG_LINIE)  {senzori |= LINIE_STG;}
-
-  mascaSensori= senzori;
-  onLine = (senzori & (LINIE_FATA | LINIE_DR | LINIE_STG));
-  if (onLine && timpQTR == 0) { 
-    if      ((senzori & LINIE_STG) && !(senzori & LINIE_DR)) parteLinie = -1;
-    else if ((senzori & LINIE_DR)  && !(senzori & LINIE_STG)) parteLinie =  1;
-    else                                                        parteLinie =  0;
-    timpQTR = millis();  
-}
-  offLine = !onLine;
-
+void forwardPulse() {
+  setMotors(245, 245);
+  //safeDelay(260);
+ // stopMotors();
 }
 
-void linieAlba() {
-  unsigned long t = millis() - timpQTR;
+void spinLeftPulse() {
+  setMotors(-180, 180);
+  safeDelay(120);
+ // stopMotors();
+}
 
-  if (t < TIMP_LIA_INAINTE) {
-    setMotoare(VITEZA_MAX, VITEZA_MAX);
+void spinRightPulse() {
+  setMotors(220, -220);
+  safeDelay(160);
+ // stopMotors();
+}
 
-  } else if (t < (unsigned long)(TIMP_LIA_INAINTE + TIMP_ROT_LINIE)) {
-    if (parteLinie == -1) setMotoare( VITEZA_MAX, -VITEZA_MAX);
-    else                  setMotoare(-VITEZA_MAX,  VITEZA_MAX);
+void setMotors(int leftSpeed, int rightSpeed) {
+  if (digitalRead(START_STOP_PIN) == LOW) {
+    stopMotors();
+    return;
+  }
 
+  leftSpeed = constrain(leftSpeed, -255, 255);
+  rightSpeed = constrain(rightSpeed, -255, 255);
+
+  if (leftSpeed > 0) {
+    digitalWrite(IN1, HIGH);
+    digitalWrite(IN2, LOW);
+    analogWrite(ENA, leftSpeed);
+  } else if (leftSpeed < 0) {
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, HIGH);
+    analogWrite(ENA, -leftSpeed);
   } else {
-    onLine     = false;
-    parteLinie = 0;
-    timpQTR    = 0;  
+    digitalWrite(IN1, LOW);
+    digitalWrite(IN2, LOW);
+    analogWrite(ENA, 0);
+  }
+
+  if (rightSpeed > 0) {
+    digitalWrite(IN3, HIGH);
+    digitalWrite(IN4, LOW);
+    analogWrite(ENB, rightSpeed);
+  } else if (rightSpeed < 0) {
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, HIGH);
+    analogWrite(ENB, -rightSpeed);
+  } else {
+    digitalWrite(IN3, LOW);
+    digitalWrite(IN4, LOW);
+    analogWrite(ENB, 0);
   }
 }
 
-void setMotoare(int8_t vm1, int8_t vm2)
-{
-  #ifndef DEBUG_MODE
-    ST.motor(1,vm1);
-    ST.motor(2,vm2);
-  #else
-  Serial.print("Motor1: "); Serial.print(vm1);
-  Serial.print(" | Motor2: "); Serial.println(vm2);
-#endif  
+void safeDelay(int ms) {
+  unsigned long startTime = millis();
+
+  while (millis() - startTime < ms) {
+    if (digitalRead(START_STOP_PIN) == LOW) {
+      stopMotors();
+      return;
+    }
+    delay(5);
+  }
 }
 
-void opponentSearch()
-{
-  
-  bool opStg = senzori & SENZ_OP_STG;
-  bool opDr = senzori & SENZ_OP_DR;
+void stopMotors() {
+  analogWrite(ENA, 0);
+  analogWrite(ENB, 0);
 
-  if (opStg && opDr)
-  {// daca ii in fata
-  setMotoare(VITEZA_MAX, VITEZA_MAX);
-  timpAtac= millis();
-  }
-  else if (opStg)
-  {//oponent in stanga
-  setMotoare(-VITEZA_CAUTARE, VITEZA_CAUTARE);
-  timpAtac = millis();
-  }
-  else if (opDr)
-  {//oponent in dreapta
-  setMotoare(VITEZA_CAUTARE, -VITEZA_CAUTARE);
-  timpAtac = millis();
-  }
-  else{// daca a iesit din raza de vedere a senzorului, rotire
-    setMotoare(VITEZA_CAUTARE, -VITEZA_CAUTARE);
-  }
+  digitalWrite(IN1, LOW);
+  digitalWrite(IN2, LOW);
+  digitalWrite(IN3, LOW);
+  digitalWrite(IN4, LOW);
 }
